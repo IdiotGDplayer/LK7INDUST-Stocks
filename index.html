@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mining Order Board — Market Driven Contracts</title>
+<style>
+  :root{
+    --bg:#0f1720; --card:#111827; --accent:#a78bfa; --muted:#94a3b8; --green:#34d399;
+    --panel:#0b1220; --gold:#f59e0b; --danger:#fb7185;
+    --glass: rgba(255,255,255,0.03);
+    font-family: Inter, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#071129 0%, #051226 100%);color:#e6eef8}
+  .wrap{max-width:1100px;margin:24px auto;padding:18px}
+  header{display:flex;gap:12px;align-items:center;margin-bottom:16px}
+  .logo{width:64px;height:64px;background:linear-gradient(135deg,#0ea5e9,#3b82f6);display:flex;align-items:center;justify-content:center;border-radius:10px;font-weight:700;font-size:22px;color:#021026;box-shadow:0 6px 18px rgba(8,16,30,0.6)}
+  h1{font-size:20px;margin:0}
+  p.lead{margin:0;color:var(--muted);font-size:13px}
+  .topbar{display:flex;gap:12px;align-items:center;margin-top:12px}
+  .balance{background:var(--glass);padding:10px 14px;border-radius:10px;display:flex;gap:10px;align-items:center}
+  .balance b{color:var(--gold);font-size:18px}
+  main{display:grid;grid-template-columns:360px 1fr;gap:16px;margin-top:16px}
+  /* left */
+  .panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:12px;border-radius:12px;box-shadow:0 6px 18px rgba(2,6,23,0.6)}
+  .stocks{display:flex;flex-direction:column;gap:8px}
+  .stock{display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px;background:rgba(255,255,255,0.01)}
+  .stock .sym{width:44px;height:44;background:#071832;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .stock .meta{flex:1}
+  .stock .meta .name{font-weight:600}
+  .stock .meta .sub{font-size:12px;color:var(--muted)}
+  .stock .price{font-weight:700}
+  .small{font-size:12px;color:var(--muted)}
+  .controls{display:flex;gap:8px;margin-top:12px}
+  button.btn{background:linear-gradient(180deg,#0ea5e9,#3b82f6);border:none;color:#021026;padding:8px 10px;border-radius:8px;font-weight:700;cursor:pointer}
+  button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)}
+  /* right */
+  .orders{display:flex;flex-direction:column;gap:12px}
+  .order-card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:12px;border-radius:10px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .order-left{display:flex;gap:12px;align-items:center}
+  .order-right{display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+  .tag{background:rgba(255,255,255,0.02);padding:6px 8px;border-radius:8px;font-weight:700;color:var(--muted)}
+  .tier{background:linear-gradient(90deg,#fca5a5,#fbbf24);color:#05122a;padding:6px 8px;border-radius:8px;font-weight:700}
+  .small-muted{font-size:12px;color:var(--muted)}
+  .accept{background:linear-gradient(180deg,#86efac,#34d399);border:none;color:#042018;padding:8px 10px;border-radius:8px;font-weight:700;cursor:pointer}
+  .complete{background:linear-gradient(180deg,#fef3c7,#f59e0b);border:none;color:#2b1600;padding:8px 10px;border-radius:8px;font-weight:700;cursor:pointer}
+  .cancel{background:linear-gradient(180deg,#fecaca,#fb7185);border:none;color:#2b0507;padding:8px 10px;border-radius:8px;font-weight:700;cursor:pointer}
+  .muted{color:var(--muted)}
+  .controls-row{display:flex;gap:8px;align-items:center}
+  footer{margin-top:20px;color:var(--muted);font-size:12px;text-align:center}
+  .stat{display:flex;flex-direction:column}
+  .spark{width:70px;height:30px}
+  @media (max-width:980px){
+    main{grid-template-columns:1fr; }
+    .logo{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">MB</div>
+    <div>
+      <h1>Mining Order Board</h1>
+      <p class="lead">Market-driven contracts for your mining economy — accept, complete, and watch the market react.</p>
+    </div>
+    <div style="margin-left:auto">
+      <div class="balance panel">
+        <div style="font-size:13px;color:var(--muted)">Balance</div>
+        <div style="min-width:140px;text-align:right"><b id="balance">$0</b><div class="small muted" id="networth">Net worth estimate</div></div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- left: Stocks -->
+    <aside class="panel">
+      <h3 style="margin:0 0 8px 0">Market</h3>
+      <div class="small muted">Resource supply controls price. Lower supply → higher payouts.</div>
+      <div class="stocks" id="stocksList" style="margin-top:12px"></div>
+
+      <div class="controls">
+        <button class="btn" id="tickBtn">Advance market</button>
+        <button class="ghost" id="resetBtn">Reset market</button>
+      </div>
+
+      <div style="margin-top:12px" class="small-muted">Market speed</div>
+      <input id="speedRange" type="range" min="1000" max="8000" step="500" value="3000" style="width:100%;margin-top:6px">
+
+      <div style="margin-top:12px" class="small-muted">Active orders</div>
+      <div id="activeCount" class="tag" style="margin-top:6px">0 pending</div>
+    </aside>
+
+    <!-- right: Orders -->
+    <section>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <h3 style="margin:0">Orders</h3>
+          <div class="small-muted">Click “Generate” for randomized contracts based on live market prices.</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <select id="presetSelect" class="ghost" style="padding:8px;border-radius:8px;background:transparent;color:var(--muted)">
+            <option value="1">Solo play</option>
+            <option value="2">Shared server</option>
+          </select>
+          <button class="btn" id="genBtn">Generate order</button>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+        <div class="small-muted">Tier</div>
+        <div id="tierButtons" style="display:flex;gap:6px"></div>
+        <div style="margin-left:auto" class="small-muted">Auto-market:</div>
+        <label style="display:flex;align-items:center;gap:6px;margin-left:6px">
+          <input type="checkbox" id="autoTick" checked /> <span class="small-muted">enabled</span>
+        </label>
+      </div>
+
+      <div id="ordersList" style="margin-top:12px" class="orders"></div>
+
+      <footer>
+        Tip: Accepting an order doesn't change market until you mark it **Completed** — that simulates delivery and affects supply.
+      </footer>
+    </section>
+  </main>
+</div>
+
+<script>
+/* -------------------------
+   Market & Orders App
+   Fully client-side. Persisted to localStorage.
+   ------------------------- */
+
+// Utility: linear interpolation
+const lerp = (a,b,t)=>a+(b-a)*t;
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const rand = (a,b)=>Math.floor(Math.random()*(b-a+1))+a;
+
+// Config: resources and base pricing (baseMin/baseMax are per-unit *before* tier multiplier)
+const DEFAULT_RESOURCES = {
+  coal:    { display:'Coal', symbol:'CO', baseMin:20, baseMax:200, stockLevel:0.7, maxSupply:20000 },
+  iron:    { display:'Iron', symbol:'Fe', baseMin:50, baseMax:400, stockLevel:0.6, maxSupply:10000 },
+  gold:    { display:'Gold', symbol:'Au', baseMin:200, baseMax:2000, stockLevel:0.8, maxSupply:5000 },
+  redstone:{ display:'Redstone', symbol:'RS', baseMin:100, baseMax:900, stockLevel:0.5, maxSupply:8000 },
+  diamond: { display:'Diamond', symbol:'DI', baseMin:1200, baseMax:8000, stockLevel:0.9, maxSupply:1000 },
+  emerald: { display:'Emerald', symbol:'EM', baseMin:800, baseMax:5000, stockLevel:0.85, maxSupply:600 },
+  lapis:   { display:'Lapis', symbol:'LP', baseMin:150, baseMax:1200, stockLevel:0.4, maxSupply:4000 },
+};
+
+// Tier multipliers (names as strings to match your idea like "0.1")
+const TIERS = [0.1, 0.25, 0.5, 1, 2];
+
+// App state
+let state = {
+  balance: 0,
+  resources: {}, // copy of DEFAULT_RESOURCES with runtime fields
+  orders: [], // {id,resource,tier,qty,pricePerUnit,total,accepted,completed,createdAt}
+  settings: { autoTick: true, tickMs: 3000 },
+  lastTick: Date.now()
+};
+
+// localStorage keys
+const KEY = 'mining_order_board_v1';
+
+// Initialize
+function init(){
+  // load or seed
+  const raw = localStorage.getItem(KEY);
+  if(raw){
+    try{
+      const parsed = JSON.parse(raw);
+      // validate minimal fields
+      state = Object.assign(state, parsed);
+      // ensure resources have necessary fields
+      state.resources = Object.assign({}, DEFAULT_RESOURCES, state.resources);
+    }catch(e){
+      console.warn('corrupt storage, resetting', e);
+      seedState();
+    }
+  } else {
+    seedState();
+  }
+
+  // mount UI
+  renderStocks();
+  renderTiers();
+  renderOrders();
+  updateBalanceUI();
+
+  // hooks
+  document.getElementById('genBtn').addEventListener('click',()=>createOrder());
+  document.getElementById('tickBtn').addEventListener('click',()=>marketTick());
+  document.getElementById('resetBtn').addEventListener('click',()=>{ if(confirm('Reset market & balance?')) { seedState(); save(); renderAll(); }});
+  document.getElementById('autoTick').addEventListener('change',(e)=>{ state.settings.autoTick = e.target.checked; save(); });
+  document.getElementById('speedRange').addEventListener('input', (e)=>{ state.settings.tickMs = parseInt(e.target.value); save(); });
+
+  // auto tick loop
+  requestAnimationFrame(loop);
+}
+
+// seed initial state
+function seedState(){
+  state.balance = 20000;
+  state.resources = {};
+  for(const k in DEFAULT_RESOURCES){
+    state.resources[k] = Object.assign({}, DEFAULT_RESOURCES[k]);
+  }
+  state.orders = [];
+  state.settings = { autoTick:true, tickMs:3000 };
+  save();
+}
+
+// persist
+function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
+
+// Renderers
+function renderStocks(){
+  const wrap = document.getElementById('stocksList');
+  wrap.innerHTML = '';
+  for(const key of Object.keys(state.resources)){
+    const r = state.resources[key];
+    const pricePerUnit = calcPricePerUnit(key, 1); // tier 1 for display baseline
+    const el = document.createElement('div');
+    el.className = 'stock';
+    el.innerHTML = `
+      <div class="sym" title="${r.display}">${r.symbol}</div>
+      <div class="meta">
+        <div class="name">${r.display} <span class="small muted">(${key})</span></div>
+        <div class="sub small">${Math.round((1-r.stockLevel)*100)}% scarcity • supply est: ${Math.round(r.stockLevel*r.maxSupply)}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="price">$${n(pricePerUnit)}/unit</div>
+        <div class="small-muted">range $${n(r.baseMin)} - $${n(r.baseMax)}</div>
+      </div>
+    `;
+    wrap.appendChild(el);
+  }
+}
+
+function renderTiers(){
+  const wrap = document.getElementById('tierButtons');
+  wrap.innerHTML = '';
+  TIERS.forEach(t=>{
+    const b = document.createElement('button');
+    b.className='ghost';
+    b.textContent = `x${t}`;
+    b.style.padding='8px 10px';
+    b.addEventListener('click',()=>{ generateOrderForTier(t); });
+    wrap.appendChild(b);
+  });
+}
+
+function renderOrders(){
+  const wrap = document.getElementById('ordersList');
+  wrap.innerHTML = '';
+  state.orders.forEach(order=>{
+    wrap.appendChild(renderOrderCard(order));
+  });
+  document.getElementById('activeCount').textContent = `${state.orders.filter(o=>!o.completed).length} pending`;
+}
+
+function renderOrderCard(order){
+  const r = state.resources[order.resource];
+  const card = document.createElement('div');
+  card.className = 'order-card';
+  const left = document.createElement('div');
+  left.className = 'order-left';
+  left.innerHTML = `
+    <div style="width:64px;height:64px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center">
+      <div style="font-weight:800">${r.symbol}</div>
+      <div class="small-muted" style="font-size:12px">${r.display}</div>
+    </div>
+    <div>
+      <div style="font-weight:800">${order.qty} x ${r.display}</div>
+      <div class="small-muted">per unit: $${n(order.pricePerUnit)} • created: ${new Date(order.createdAt).toLocaleTimeString()}</div>
+    </div>
+  `;
+  const right = document.createElement('div');
+  right.className = 'order-right';
+  right.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center">
+      <div class="tag">Total: <b style="margin-left:6px">$${n(order.total)}</b></div>
+      <div class="tier">Tier x${order.tier}</div>
+    </div>
+  `;
+
+  // action buttons
+  const actions = document.createElement('div');
+  actions.className = 'controls-row';
+  if(!order.accepted){
+    const acceptBtn = document.createElement('button');
+    acceptBtn.className='accept';
+    acceptBtn.textContent='Accept';
+    acceptBtn.onclick = ()=>{ order.accepted = true; save(); renderOrders(); };
+    actions.appendChild(acceptBtn);
+  } else if(order.accepted && !order.completed){
+    const completeBtn = document.createElement('button');
+    completeBtn.className='complete';
+    completeBtn.textContent='Complete';
+    completeBtn.onclick = ()=>{ completeOrder(order.id); };
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className='cancel';
+    cancelBtn.textContent='Cancel';
+    cancelBtn.onclick = ()=>{ if(confirm('Cancel order?')) { removeOrder(order.id); } };
+    actions.appendChild(completeBtn);
+    actions.appendChild(cancelBtn);
+  } else {
+    const done = document.createElement('div');
+    done.className='tag';
+    done.textContent = 'Completed';
+    actions.appendChild(done);
+  }
+
+  right.appendChild(actions);
+  card.appendChild(left);
+  card.appendChild(right);
+  return card;
+}
+
+function updateBalanceUI(){
+  document.getElementById('balance').textContent = '$' + n(state.balance);
+  // simple networth: cash + small estimate from remaining supply across resources
+  let estimate = state.balance;
+  for(const k in state.resources){
+    const r = state.resources[k];
+    estimate += Math.round(r.stockLevel * r.maxSupply * calcPricePerUnit(k, 0.25));
+  }
+  document.getElementById('networth').textContent = 'Est. net worth: $' + n(Math.round(estimate));
+}
+
+/* -------------------------
+   Orders logic
+   ------------------------- */
+
+function createOrder(){
+  // choose random tier and resource if not specified
+  const tier = TIERS[Math.floor(Math.random()*TIERS.length)];
+  generateOrderForTier(tier);
+}
+
+function generateOrderForTier(tier){
+  // pick resource weighted by rarity (lower stock => more likely to be requested)
+  const keys = Object.keys(state.resources);
+  const weights = keys.map(k=> (1 - state.resources[k].stockLevel) + Math.random()*0.2 );
+  const sum = weights.reduce((a,b)=>a+b,0);
+  let pick = Math.random()*sum;
+  let selectedKey = keys[0];
+  for(let i=0;i<keys.length;i++){
+    pick -= weights[i];
+    if(pick<=0){ selectedKey = keys[i]; break; }
+  }
+  const r = state.resources[selectedKey];
+
+  // qty depends on tier / resource
+  const qty = genQuantityForResource(selectedKey, tier);
+
+  // price per unit uses resource base and current stocklevel, then multiply by tier
+  const pricePerUnit = calcPricePerUnit(selectedKey, tier);
+  const total = Math.max(1, Math.round(pricePerUnit * qty));
+
+  const order = {
+    id: 'o_' + Date.now() + '_' + Math.floor(Math.random()*9999),
+    resource: selectedKey,
+    tier,
+    qty,
+    pricePerUnit: Math.round(pricePerUnit),
+    total,
+    accepted:false,
+    completed:false,
+    createdAt: Date.now()
+  };
+  state.orders.unshift(order);
+  save();
+  renderOrders();
+  updateBalanceUI();
+  flashMessage(`New order: ${qty} x ${r.display} — $${n(total)}`);
+}
+
+function genQuantityForResource(key, tier){
+  const r = state.resources[key];
+  // scaled by tier: higher tiers -> bigger qty, but with randomness
+  const base = Math.round(r.maxSupply * 0.01); // 1% default
+  const tierScale = (tier<=0.25? 0.2 : tier<=0.5? 0.5 : tier<=1? 1 : 1.8);
+  const qty = clamp(Math.round(base * tierScale * (0.5 + Math.random()*1.5)), 10, Math.min(5000, r.maxSupply));
+  return qty;
+}
+
+function completeOrder(id){
+  const idx = state.orders.findIndex(o=>o.id===id);
+  if(idx===-1) return;
+  const order = state.orders[idx];
+  if(!order.accepted){ alert('You must Accept before completing.'); return; }
+  if(order.completed){ alert('Already completed'); return; }
+
+  // payout
+  state.balance += order.total;
+  // reduce supply: reduce stockLevel proportionally to quantity relative to maxSupply
+  const r = state.resources[order.resource];
+  const impact = order.qty / r.maxSupply; // e.g. qty/maxSupply
+  r.stockLevel = clamp(r.stockLevel + impact * 0.1, 0.01, 1); // more mined increases availability (increase stockLevel), which **lowers** price
+  // Wait: to make lower availability when mined? This depends on semantics:
+  // We'll assume stockLevel represents fraction of remaining supply (higher = more available).
+  // Completing an order reduces supply; that means stockLevel should DECREASE.
+  // But above we incorrectly added. Let's correct: reduce stockLevel.
+  r.stockLevel = clamp(r.stockLevel - impact * 0.25, 0.01, 1);
+
+  order.completed = true;
+  save();
+  renderOrders();
+  updateBalanceUI();
+  flashMessage(`Completed order +$${n(order.total)}`);
+}
+
+// remove/cancel
+function removeOrder(id){
+  const idx = state.orders.findIndex(o=>o.id===id);
+  if(idx===-1) return;
+  state.orders.splice(idx,1);
+  save();
+  renderOrders();
+  updateBalanceUI();
+}
+
+/* -------------------------
+   Market simulation
+   ------------------------- */
+
+function marketTick(){
+  // For each resource, apply a small random movement to stockLevel
+  for(const k in state.resources){
+    const r = state.resources[k];
+    // random drift influenced by existing trend: small random change
+    const delta = (Math.random()-0.5) * 0.06; // +/-3%
+    // add small mean reversion toward 0.6 to avoid extremes
+    const meanRevert = (0.6 - r.stockLevel) * 0.02;
+    r.stockLevel = clamp(r.stockLevel + delta + meanRevert, 0.01, 1);
+    // small passive replenishment for low stock
+    if(r.stockLevel < 0.08){
+      r.stockLevel = clamp(r.stockLevel + 0.08*Math.random(), 0.01, 1);
+    }
+  }
+  // aging: remove old unaccepted orders automatically after some time (optional)
+  const now = Date.now();
+  state.orders = state.orders.filter(o => (o.accepted || (now - o.createdAt) < 1000 * 60 * 20)); // 20 min lifespan if not accepted
+  save();
+  renderAll();
+}
+
+function calcPricePerUnit(resourceKey, tierMultiplier){
+  const r = state.resources[resourceKey];
+  // price is higher when scarcity is higher. scarcity = 1 - stockLevel
+  const scarcity = clamp(1 - r.stockLevel, 0, 1);
+  const base = lerp(r.baseMin, r.baseMax, scarcity); // base min..max
+  return base * tierMultiplier;
+}
+
+/* -------------------------
+   Helpers & UI bits
+   ------------------------- */
+
+function renderAll(){
+  renderStocks();
+  renderOrders();
+  updateBalanceUI();
+}
+
+function n(x){ return x.toLocaleString(); }
+
+// small toast
+let toastTimer;
+function flashMessage(txt){
+  const t = document.createElement('div');
+  t.style.position='fixed';
+  t.style.right='18px';
+  t.style.bottom='18px';
+  t.style.background='linear-gradient(180deg,#10b981,#34d399)';
+  t.style.padding='10px 14px';
+  t.style.borderRadius='10px';
+  t.style.color='#052018';
+  t.style.fontWeight='700';
+  t.style.boxShadow='0 8px 30px rgba(0,0,0,0.6)';
+  t.textContent = txt;
+  document.body.appendChild(t);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{ t.style.transition='opacity 400ms'; t.style.opacity='0'; setTimeout(()=>t.remove(),420); }, 2200);
+}
+
+/* -------------------------
+   Loop
+   ------------------------- */
+function loop(){
+  const now = Date.now();
+  if(state.settings.autoTick && (now - state.lastTick) > state.settings.tickMs){
+    state.lastTick = now;
+    marketTick();
+  }
+  requestAnimationFrame(loop);
+}
+
+// small UI for direct generate tier
+function generateOrderModal(){}
+  
+// startup
+init();
+</script>
+</body>
+</html>
