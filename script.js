@@ -1,6 +1,6 @@
 /* script.js
-  Mining Order Board — Market, Orders, Leveling, Companies, Investments, Autosave.
-  Fully client-side. Save to localStorage. Use data.js + GitHub Action later for global leaderboard.
+   Mining Order Board v2 — integrated with filters, decline XP penalty, companies list, webhooks integration.
+   NOTE: Only new behavior was added or inserted; core logic follows earlier design.
 */
 
 // ----------------------------- Config & Utilities -----------------------------
@@ -15,13 +15,11 @@ const MAX_BULK = 20480; // company bulk cap
 const TIERS = [0.1, 0.25, 0.5, 1, 2, 5];
 
 const uuid = () => 'id_' + Math.random().toString(36).slice(2,9);
-
-// helpers
 const lerp = (a,b,t)=>a+(b-a)*t;
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
 const n = x => (Math.round(x)).toLocaleString();
 
-// ----------------------------- Default resources (used if ores.js empty) -------------
+// ----------------------------- Default resources -----------------------------
 const DEFAULT_ORES = {
   coal:    { display:'Coal', symbol:'CO', baseMin:20, baseMax:200, stockLevel:0.7, maxSupply:20000 },
   iron:    { display:'Iron', symbol:'Fe', baseMin:50, baseMax:400, stockLevel:0.6, maxSupply:10000 },
@@ -36,46 +34,47 @@ let state = {
     name: 'You',
     balance: 20000,
     xp: 0,
-    level: 1
+    level: 1,
+    companyId: null
   },
-  resources: {}, // filled from ores.js or defaults; each gets .history
-  orders: [], // {id,resource,tier,qty,priceAtCreate,locked:false,accepted,completed,ownerType:'solo'|'company',companyId:null,createdAt}
-  companies: [], // {id,name,netWorth,members:[]}
-  investments: [], // {id,ownerType:'player'|'company',ownerId,resource,qty,buyPrice,buyTime}
+  resources: {}, // filled from ores.js or defaults
+  orders: [], // active orders
+  companies: [], // created companies
+  investments: [],
   settings: { autoTick:true, autoOrders:true, tickMs:MARKET_TICK_MS },
   lastAutoOrder: 0,
   lastTick: Date.now()
 };
 
-// ----------------------------- Init & Persistence -----------------------------
+// ----------------------------- Persistence -----------------------------
 function loadState(){
   const raw = localStorage.getItem(KEY);
   if(raw){
     try{
       const parsed = JSON.parse(raw);
+      // shallow merge to preserve default structure but load saved values
       Object.assign(state, parsed);
-      // ensure resources from ores.js override or fill
     }catch(e){
-      console.warn('bad storage, resetting', e);
       seedState();
     }
   } else {
     seedState();
   }
-  // merge ores from window.ORES if present
+
+  // Merge ores
   if(window.ORES && Object.keys(window.ORES).length){
     for(const k in window.ORES){
       state.resources[k] = Object.assign({}, window.ORES[k]);
-      if(!Array.isArray(state.resources[k].history)) state.resources[k].history = [];
+      state.resources[k].history = state.resources[k].history || [];
     }
   } else {
-    // use default ores if none provided
     for(const k in DEFAULT_ORES){
-      state.resources[k] = Object.assign({}, DEFAULT_ORES[k]);
-      if(!Array.isArray(state.resources[k].history)) state.resources[k].history = [];
+      state.resources[k] = state.resources[k] || Object.assign({}, DEFAULT_ORES[k]);
+      state.resources[k].history = state.resources[k].history || [];
     }
   }
-  // ensure resource fields
+
+  // Ensure fields
   for(const k in state.resources){
     const r = state.resources[k];
     r.stockLevel = clamp(typeof r.stockLevel === 'number' ? r.stockLevel : 0.6, 0.01, 1);
@@ -88,14 +87,13 @@ function saveState(){
   localStorage.setItem(KEY, JSON.stringify(state));
 }
 
-// autosave on interval
+// autosave timer
 setInterval(()=>{ saveState(); flashMessage('Autosaved'); }, AUTOSAVE_MS);
 
-// ----------------------------- UI Bindings & Render -----------------------------
+// ----------------------------- UI helpers -----------------------------
 function $(id){ return document.getElementById(id); }
 
 function initUI(){
-  // hook buttons
   $('tickBtn').addEventListener('click', ()=>{ marketTick(); });
   $('resetBtn').addEventListener('click', ()=>{ if(confirm('Reset everything?')) { seedState(); saveState(); renderAll(); } });
   $('genBtn').addEventListener('click', ()=> createOrder());
@@ -109,19 +107,17 @@ function initUI(){
   $('leaveCompanyBtn').addEventListener('click', leaveCompany);
   $('companyInvestBtn').addEventListener('click', ()=> openInvestModal('company'));
 
-  // tier buttons
-  renderTiers();
+  renderTiers(); // will attach filter handlers
   renderAll();
-
-  // mode select default
-  $('modeSelect').value = 'solo';
 }
 
+// ----------------------------- Renderers -----------------------------
 function renderAll(){
   renderStocks();
   renderOrders();
   renderPlayerUI();
   renderCompanyPanel();
+  renderCompanyList();
   renderInvestments();
   renderLeaderboard();
 }
@@ -153,7 +149,6 @@ function renderStocks(){
       <canvas class="spark" id="spark_${key}"></canvas>
       <div class="price">$${n(price)}/unit</div>
     `;
-    // invest on click
     item.addEventListener('click', ()=> openInvestModal('player', key));
     wrap.appendChild(item);
     drawSparkline(r.history, document.getElementById(`spark_${key}`));
@@ -163,12 +158,19 @@ function renderStocks(){
 function renderTiers(){
   const wrap = $('tierButtons');
   wrap.innerHTML = '';
+  // Add "All" filter
+  const allBtn = document.createElement('button'); allBtn.className='ghost tier-button'; allBtn.textContent='All'; allBtn.dataset.tier='all';
+  allBtn.addEventListener('click', ()=> filterOrdersByTier('all'));
+  wrap.appendChild(allBtn);
+
   TIERS.forEach(t=>{
     const b = document.createElement('button');
-    b.className='ghost';
+    b.className='ghost tier-button';
     b.textContent = `x${t}`;
     b.style.padding='8px 10px';
-    b.addEventListener('click',()=> generateOrderForTier(t));
+    b.dataset.tier = String(t);
+    // NEW: attach filter behavior (no order generation)
+    b.addEventListener('click', ()=> filterOrdersByTier(String(t)));
     wrap.appendChild(b);
   });
 }
@@ -179,7 +181,8 @@ function renderOrders(){
   state.orders.forEach(order=>{
     const r = state.resources[order.resource];
     const card = document.createElement('div');
-    card.className = 'order-card';
+    card.className = 'order-card order';
+    card.setAttribute('data-tier', String(order.tier));
     const left = document.createElement('div');
     left.style.display='flex'; left.style.gap='12px'; left.style.alignItems='center';
     left.innerHTML = `
@@ -202,10 +205,14 @@ function renderOrders(){
     `;
     const actions = document.createElement('div');
     actions.style.display='flex'; actions.style.gap='8px';
+    // Accept / Complete / Cancel / Decline
     if(!order.accepted){
       const accept = document.createElement('button'); accept.className='accept'; accept.textContent='Accept';
       accept.onclick = ()=> { order.accepted = true; order.lockedPrice = order.total; saveState(); renderOrders(); flashMessage('Order accepted'); };
+      const decline = document.createElement('button'); decline.className='cancel'; decline.textContent='Decline';
+      decline.onclick = ()=> { declineOrder(order.id); };
       actions.appendChild(accept);
+      actions.appendChild(decline);
     } else if(order.accepted && !order.completed){
       const complete = document.createElement('button'); complete.className='complete'; complete.textContent='Complete';
       complete.onclick = ()=> { completeOrder(order.id); };
@@ -237,6 +244,34 @@ function renderCompanyPanel(){
   }
 }
 
+function renderCompanyList(){
+  const wrap = $('companyList');
+  wrap.innerHTML = '';
+  // merge local companies and server companies (server is placeholder)
+  const server = window.SERVER_DATA || { companies: [] };
+  // first local companies
+  const all = state.companies.concat(server.companies || []);
+  if(all.length === 0){ wrap.innerHTML = '<div class="small-muted">No companies yet.</div>'; return; }
+  all.forEach(c=>{
+    const el = document.createElement('div');
+    el.style.display='flex'; el.style.justifyContent='space-between'; el.style.alignItems='center'; el.style.padding='6px 0';
+    el.innerHTML = `<div><div style="font-weight:800">${c.name}</div><div class="small-muted">Net: $${n(c.netWorth||0)}</div></div>`;
+    const controls = document.createElement('div'); controls.style.display='flex'; controls.style.gap='6px';
+    const joinBtn = document.createElement('button'); joinBtn.className='ghost'; joinBtn.textContent='Join';
+    joinBtn.onclick = ()=> { joinCompany(c); };
+    controls.appendChild(joinBtn);
+
+    // Transfer funds UI (if player is in a company, show transfer to that company)
+    const transferBtn = document.createElement('button'); transferBtn.className='ghost'; transferBtn.textContent='Transfer';
+    transferBtn.onclick = ()=> { transferToCompanyPrompt(c); };
+    controls.appendChild(transferBtn);
+
+    el.appendChild(controls);
+    wrap.appendChild(el);
+  });
+}
+
+// Investments list
 function renderInvestments(){
   const wrap = $('investList');
   wrap.innerHTML = '';
@@ -266,11 +301,8 @@ function renderInvestments(){
 function renderLeaderboard(){
   const wrap = $('leaderboard');
   wrap.innerHTML = '';
-  // local top players (just show player's info and companies)
   const players = [{name:state.player.name, level:state.player.level, netWorth:state.player.balance}];
-  // include server data if present (data.js)
   const server = window.SERVER_DATA || { players:[], companies:[] };
-  // show top server players
   const allPlayers = server.players.slice(0,10).concat(players).slice(0,15);
   allPlayers.forEach(p=>{
     const el = document.createElement('div');
@@ -278,7 +310,6 @@ function renderLeaderboard(){
     el.innerHTML = `<div>${p.name} <span class="small-muted">Lvl:${p.level||1}</span></div><div>$${n(p.netWorth||0)}</div>`;
     wrap.appendChild(el);
   });
-  // companies
   if(server.companies && server.companies.length){
     const title = document.createElement('div'); title.style.marginTop='8px'; title.style.fontWeight='800'; title.textContent='Companies';
     wrap.appendChild(title);
@@ -299,15 +330,12 @@ function calcPricePerUnit(resourceKey, tierMultiplier){
 }
 
 function marketTick(){
-  // small random movement + mean reversion
   for(const k in state.resources){
     const r = state.resources[k];
-    const delta = (Math.random()-0.5) * 0.06; // +/-3%
+    const delta = (Math.random()-0.5) * 0.06;
     const meanRevert = (0.6 - r.stockLevel) * 0.02;
     r.stockLevel = clamp(r.stockLevel + delta + meanRevert, 0.01, 1);
-    // small replenishment floor
     if(r.stockLevel < 0.05) r.stockLevel = clamp(r.stockLevel + 0.04*Math.random(), 0.01, 1);
-    // record history
     const price = calcPricePerUnit(k,1);
     r.history.push(price);
     if(r.history.length > MAX_HISTORY) r.history.shift();
@@ -319,23 +347,18 @@ function marketTick(){
 
 // ----------------------------- Orders -----------------------------
 function createOrder(){
-  // random tier and resource influenced by level & company status
   const mode = $('modeSelect').value;
   const tier = randomTierByPlayer();
   generateOrderForTier(tier, mode);
 }
 
 function randomTierByPlayer(){
-  // level increases chance for higher tiers
   const L = state.player.level;
-  // base weights for tiers low->high
   const baseWeights = TIERS.map((t, i) => {
-    // higher tiers require higher level; give +weight per level
     const wantLevel = Math.max(1, Math.round(Math.log2(t+1) * 3));
     const levelFactor = clamp((L - wantLevel) / (wantLevel+3), -1, 1);
     return Math.max(0.1, (1 / (i+1)) * (1 + levelFactor * 1.5));
   });
-  // normalize
   const sum = baseWeights.reduce((a,b)=>a+b,0);
   let pick = Math.random()*sum;
   let idx = 0;
@@ -347,7 +370,6 @@ function randomTierByPlayer(){
 }
 
 function generateOrderForTier(tier, mode='solo'){
-  // pick resource weighted by scarcity
   const keys = Object.keys(state.resources);
   const weights = keys.map(k => (1 - state.resources[k].stockLevel) + Math.random()*0.2 );
   const sum = weights.reduce((a,b)=>a+b,0);
@@ -358,14 +380,11 @@ function generateOrderForTier(tier, mode='solo'){
     if(pick<=0){ selected = keys[i]; break; }
   }
   const r = state.resources[selected];
-  // qty depending on mode and tier
   let qty;
   if(mode==='company' && state.player.companyId){
-    // company bulk: larger
     const base = Math.round(r.maxSupply * 0.05);
     qty = clamp(Math.round(base * (tier*2) * (0.8 + Math.random()*1.6)), 1000, MAX_BULK);
   } else {
-    // solo
     const base = Math.round(r.maxSupply * 0.001);
     qty = clamp(Math.round(base * (tier<=0.25?1: tier<=0.5?2:4) * (0.5 + Math.random()*2)), 10, 500);
   }
@@ -392,7 +411,6 @@ function generateOrderForTier(tier, mode='solo'){
 }
 
 function generateAutoOrder(){
-  // auto-generation every 10s with chance for any tier
   if(!state.settings.autoOrders) return;
   const tier = TIERS[Math.floor(Math.random()*TIERS.length)];
   const mode = Math.random() < 0.2 && state.player.companyId ? 'company' : 'solo';
@@ -406,22 +424,23 @@ function completeOrder(id){
   if(!order.accepted){ alert('You must accept before completing.'); return; }
   if(order.completed){ alert('Already completed'); return; }
 
-  // If it's a bulk (company) order, payout recalculated by current market price
   const currentPerUnit = calcPricePerUnit(order.resource, order.tier);
   const payout = Math.round(currentPerUnit * order.qty * (order.ownerType==='company' ? pfMultiplierForCompany(order.companyId) : 1));
 
-  // pay to player or company
   if(order.ownerType === 'company' && order.companyId){
     const comp = state.companies.find(c=>c.id===order.companyId);
     if(comp){
       comp.netWorth += payout;
-      // optionally distribute share — for now it goes to company netWorth
+      // webhook
+      if(window.sendWebhook) sendWebhook('bulkComplete', { company: comp.name, qty: order.qty, ore: order.resource, payout });
+      // PF milestone check
+      if(pf(comp) >= 4) { if(window.sendWebhook) sendWebhook('pfMilestone', { company: comp.name, pf: pf(comp) }); }
     }
   } else {
     state.player.balance += payout;
+    if(window.sendWebhook) sendWebhook('orderComplete', { player: state.player.name, qty: order.qty, ore: order.resource, tier: order.tier, payout });
   }
 
-  // Impact market: completing reduces available supply -> increase stockLevel or decrease? We'll reduce stockLevel to represent depletion
   const r = state.resources[order.resource];
   const impact = order.qty / r.maxSupply;
   r.stockLevel = clamp(r.stockLevel - impact * 0.25, 0.01, 1);
@@ -429,7 +448,6 @@ function completeOrder(id){
   order.completed = true;
   order.completedAt = Date.now();
   order.finalPayout = payout;
-  // grant XP to player
   addXP(Math.max(1, Math.round(payout / 1000)));
   saveState();
   renderAll();
@@ -444,23 +462,40 @@ function removeOrder(id){
   renderOrders();
 }
 
+// ----------------------------- Decline logic (new) -----------------------------
+function declineOrder(id){
+  const idx = state.orders.findIndex(o=>o.id===id);
+  if(idx===-1) return;
+  const order = state.orders[idx];
+  // xpLoss formula: xpLoss = round((order.tier * order.qty) / 10)
+  const xpLoss = Math.max(1, Math.round((order.tier * order.qty) / 10));
+  state.player.xp = Math.max(0, state.player.xp - xpLoss);
+  // remove the order
+  state.orders.splice(idx,1);
+  saveState();
+  renderAll();
+  flashMessage(`Declined order — XP -${n(xpLoss)}`);
+}
+
 // ----------------------------- Leveling -----------------------------
 function xpForLevel(L){ return 50 * L * L; } // quadratic XP requirement
 function addXP(x){
   state.player.xp += x;
+  let leveled = false;
   while(state.player.xp >= xpForLevel(state.player.level+1)){
     state.player.level += 1;
-    flashMessage(`Level up! Now level ${state.player.level}`);
+    leveled = true;
+    if(window.sendWebhook) sendWebhook('levelUp', { player: state.player.name, level: state.player.level });
   }
+  if(leveled) flashMessage(`Level up! Now level ${state.player.level}`);
   saveState();
   renderPlayerUI();
 }
 
-// ----------------------------- Companies & Prosperity Factor -----------------------------
+// ----------------------------- Companies -----------------------------
 function createCompanyFromInput(){
   const name = $('companyName').value.trim();
   if(!name){ alert('Choose a name'); return; }
-  // cost to create
   const cost = 10000;
   if(state.player.balance < cost){ alert('Not enough balance to start a company ($10,000)'); return; }
   state.player.balance -= cost;
@@ -470,22 +505,57 @@ function createCompanyFromInput(){
   saveState();
   renderAll();
   flashMessage(`Company ${name} created`);
+  if(window.sendWebhook) sendWebhook('companyCreated', { company: name, player: state.player.name });
+}
+
+function joinCompany(cobj){
+  // cobj may be from server (only name/netWorth) or local; if server: create a local stub join
+  let comp = state.companies.find(cc=>cc.id===cobj.id);
+  if(!comp){
+    // create local copy so player can join
+    comp = { id: cobj.id || ('c_ext_' + Math.floor(Math.random()*99999)), name: cobj.name, netWorth: cobj.netWorth || 0, members: [] };
+    state.companies.push(comp);
+  }
+  if(!comp.members.includes(state.player.name)) comp.members.push(state.player.name);
+  state.player.companyId = comp.id;
+  saveState();
+  renderAll();
+  flashMessage(`Joined ${comp.name}`);
 }
 
 function leaveCompany(){
   if(!state.player.companyId){ alert('You are not in a company'); return; }
   const comp = state.companies.find(c=>c.id===state.player.companyId);
-  if(!comp) { state.player.companyId = null; saveState(); renderAll(); return; }
-  comp.members = comp.members.filter(m=>m !== state.player.name);
+  if(comp){
+    comp.members = comp.members.filter(m=>m !== state.player.name);
+  }
   state.player.companyId = null;
   saveState();
   renderAll();
   flashMessage('Left company');
 }
 
-// Prosperity Factor (PF) — multiplier influence for companies
+function transferToCompanyPrompt(c){
+  const amountStr = prompt(`Enter amount to transfer to ${c.name}:`);
+  const amount = Number(amountStr);
+  if(!amount || amount <= 0){ alert('Invalid amount'); return; }
+  if(state.player.balance < amount){ alert('Not enough balance'); return; }
+  // find or create company locally
+  let comp = state.companies.find(cc=>cc.id===c.id);
+  if(!comp){
+    comp = { id: c.id || ('c_ext_' + Math.floor(Math.random()*99999)), name: c.name, netWorth: c.netWorth || 0, members: [] };
+    state.companies.push(comp);
+  }
+  state.player.balance -= amount;
+  comp.netWorth += amount;
+  saveState();
+  renderAll();
+  flashMessage(`Transferred $${n(amount)} to ${comp.name}`);
+  if(window.sendWebhook) sendWebhook('investment', { player: state.player.name, amount, ore: 'company transfer' });
+}
+
+// Prosperity Factor
 function pf(company){
-  // PF = 1 + log2(1 + netWorth / 10000)
   if(!company) return 1;
   return 1 + Math.log2(1 + (company.netWorth / 10000));
 }
@@ -497,32 +567,26 @@ function pfMultiplierForCompany(companyId){
 
 // ----------------------------- Investments -----------------------------
 function openInvestModal(ownerType='player', resourceKey){
-  // simple prompt UI for now (keeps code small and copy-paste friendly)
   const rKey = resourceKey || prompt('Enter resource key to invest (e.g., coal):');
   if(!rKey || !state.resources[rKey]){ alert('Invalid resource'); return; }
   const amountStr = prompt('Enter amount of money to invest (e.g., 5000):');
   const amount = Number(amountStr);
   if(!amount || amount <= 0){ alert('Invalid amount'); return; }
-  // determine qty = amount / (current price * INVEST_PRICE_FACTOR)
   const current = calcPricePerUnit(rKey, 1);
   const buyPricePerUnit = current * INVEST_PRICE_FACTOR;
   const qty = Math.floor(amount / buyPricePerUnit);
   if(qty < 1){ alert('Not enough to buy even 1 unit at this factor'); return; }
-  // debit funds
   if(ownerType === 'player'){
     if(state.player.balance < amount){ alert('Not enough balance'); return; }
     state.player.balance -= amount;
   } else {
-    // company investment
     if(!state.player.companyId){ alert('No company'); return; }
     const comp = state.companies.find(c=>c.id===state.player.companyId);
     if(!comp){ alert('Company not found'); return; }
-    // company invests from company netWorth
     if(comp.netWorth < amount){ alert('Company lacks funds'); return; }
     comp.netWorth -= amount;
   }
 
-  // create investment
   const inv = {
     id: 'inv_' + Date.now(),
     ownerType,
@@ -533,55 +597,45 @@ function openInvestModal(ownerType='player', resourceKey){
     buyTime: Date.now()
   };
   state.investments.push(inv);
-
-  // market impact: spike by amount size
   applyInvestmentImpact(inv);
-
   saveState();
   renderAll();
   flashMessage(`Invested $${n(amount)} in ${state.resources[rKey].display} (${qty} units)`);
+  if(window.sendWebhook) sendWebhook('investment', { player: state.player.name, amount: amount, ore: rKey });
 }
 
 function applyInvestmentImpact(inv){
   const r = state.resources[inv.resource];
-  // company investments have larger effect
   const ownerFactor = inv.ownerType === 'company' ? 2.0 : 1.0;
-  const k = 0.02 * ownerFactor; // base impact
+  const k = 0.02 * ownerFactor;
   const magnitude = k * Math.log(1 + inv.qty);
-  // apply immediate spike (reduce stockLevel to increase price)
   r.stockLevel = clamp(r.stockLevel - magnitude, 0.01, 1);
-  // schedule crash: overshoot increase a bit after a delay
   setTimeout(()=>{
-    // crash: increase stockLevel (price drops)
     r.stockLevel = clamp(r.stockLevel + magnitude * (1.2 + Math.random()*0.6), 0.01, 1);
-    // the marketTick mean reversion will smooth thereafter
     saveState();
     renderAll();
-  }, 4000 + Math.random()*6000); // crash after 4-10s
+  }, 4000 + Math.random()*6000);
 }
 
-// Selling investment
 window.sellInvestment = function(invId){
   const idx = state.investments.findIndex(i=>i.id===invId);
   if(idx===-1) return;
   const inv = state.investments[idx];
   const current = calcPricePerUnit(inv.resource, 1);
   const proceeds = Math.round(current * inv.qty);
-  // credit
   if(inv.ownerType === 'player'){
     state.player.balance += proceeds;
   } else {
     const comp = state.companies.find(c=>c.id===inv.ownerId);
     if(comp) comp.netWorth += proceeds;
   }
-  // remove investment
   state.investments.splice(idx,1);
   saveState();
   renderAll();
   flashMessage(`Sold investment for $${n(proceeds)}`);
 };
 
-// ----------------------------- Helpers & UI bits -----------------------------
+// ----------------------------- Helpers -----------------------------
 function drawSparkline(history, canvas){
   if(!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -641,7 +695,7 @@ function handleImport(e){
   reader.readAsText(file);
 }
 
-// ----------------------------- Init, seed, loop -----------------------------
+// ----------------------------- Loop & seed -----------------------------
 function seedState(){
   state = {
     player: { id: uuid(), name: 'You', balance: 20000, xp:0, level:1, companyId:null },
@@ -653,7 +707,6 @@ function seedState(){
     lastAutoOrder: 0,
     lastTick: Date.now()
   };
-  // load ores
   if(window.ORES && Object.keys(window.ORES).length){
     for(const k in window.ORES){ state.resources[k] = Object.assign({}, window.ORES[k]); state.resources[k].history = []; }
   } else {
@@ -665,11 +718,9 @@ function seedState(){
 
 function loop(){
   const now = Date.now();
-  // market auto-tick
   if(state.settings.autoTick && (now - state.lastTick) > state.settings.tickMs){
     marketTick();
   }
-  // auto orders
   if(state.settings.autoOrders && (now - state.lastAutoOrder) > AUTO_ORDER_INTERVAL){
     state.lastAutoOrder = now;
     generateAutoOrder();
@@ -677,8 +728,17 @@ function loop(){
   requestAnimationFrame(loop);
 }
 
+// ----------------------------- Order filtering (new) -----------------------------
+function filterOrdersByTier(tierStr){
+  const cards = document.querySelectorAll('.order-card.order');
+  cards.forEach(card=>{
+    const t = card.getAttribute('data-tier');
+    if(tierStr === 'all') card.style.display = '';
+    else card.style.display = (t === tierStr) ? '' : 'none';
+  });
+}
+
 // ----------------------------- Startup -----------------------------
 loadState();
 initUI();
 loop();
-
