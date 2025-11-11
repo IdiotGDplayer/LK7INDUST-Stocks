@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Mining Order Board — Mining Economy Simulator</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Mining Order Board — Final Sandbox</title>
+  <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
   <div class="wrap">
@@ -12,14 +12,14 @@
       <div class="logo">MB</div>
       <div>
         <h1>Mining Order Board</h1>
-        <p class="lead">Market-driven contracts, companies, investments & leaderboards.</p>
-        <div class="sublead">Auto orders every 10s • Autosave • Export/Import backup</div>
+        <p class="lead">Market-driven mining economy — host sandbox, investments, persistent ores.</p>
+        <div class="sublead">Auto orders • Autosave • Export ores for permanence</div>
       </div>
 
       <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
         <div class="balance panel">
           <div style="font-size:12px;color:var(--muted)">Balance</div>
-          <div style="min-width:120px;text-align:right"><b id="balance">$0</b><div class="small muted" id="networth">Est net worth</div></div>
+          <div style="min-width:120px;text-align:right"><b id="balance">$0</b><div class="small muted" id="networth">Net worth</div></div>
         </div>
 
         <div class="panel stat" style="padding:8px 12px">
@@ -31,15 +31,24 @@
     </header>
 
     <main>
-      <!-- Left: Market + Investments -->
       <aside class="panel leftcol">
         <h3 style="margin:0 0 8px 0">Market</h3>
-        <div class="small muted">Resources — click an ore to invest, view sparkline and price.</div>
+        <div class="small muted">Click an ore to invest. Prices are live and driven by events.</div>
 
-        <div class="market-controls" style="margin-top:10px;display:flex;gap:8px">
-          <button class="btn" id="tickBtn">Advance market</button>
-          <button class="ghost" id="resetBtn">Reset</button>
-          <label style="display:flex;align-items:center;gap:6px;margin-left:auto"><input type="checkbox" id="autoTick" checked /> <span class="small-muted">Auto-tick</span></label>
+        <div class="market-controls" style="margin-top:10px;display:flex;gap:8px;align-items:center">
+          <div style="display:flex;gap:8px;align-items:center">
+            <label class="small-muted">Speed</label>
+            <input id="speedRange" type="range" min="800" max="5000" step="200" value="3000">
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
+            <label class="small-muted">Fluct Rarity</label>
+            <select id="raritySelect" class="ghost">
+              <option value="1">Common</option>
+              <option value="2">Rare</option>
+              <option value="3">Chaotic</option>
+              <option value="4">Super-Mega</option>
+            </select>
+          </div>
         </div>
 
         <div id="stocksList" class="stocks" style="margin-top:12px"></div>
@@ -48,24 +57,26 @@
         <div id="investList" class="panel" style="padding:8px;border-radius:10px;max-height:180px;overflow:auto"></div>
 
         <div style="margin-top:12px;display:flex;gap:8px">
-          <button class="ghost" id="exportBtn">Export Data</button>
-          <label class="ghost" for="importInput" style="cursor:pointer;padding:8px;border-radius:8px">Import Data</label>
+          <button class="ghost" id="exportBtn">Export Player Data</button>
+          <label class="ghost" for="importInput" style="cursor:pointer;padding:8px;border-radius:8px">Import Player</label>
           <input id="importInput" type="file" accept="application/json" style="display:none" />
+        </div>
+
+        <div style="margin-top:12px;font-size:12px;color:var(--muted)">
+          Host tools hidden bottom-right (password required). Host changes saved separately (hostData_LK7).
         </div>
       </aside>
 
-      <!-- Right: Orders, Companies, Leaderboard -->
       <section class="panel rightcol">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div>
             <h3 style="margin:0">Orders</h3>
-            <div class="small-muted">Generate, accept, complete. Auto orders every 10s.</div>
+            <div class="small-muted">Auto orders generate periodically. Accept → complete. Decline penalizes XP.</div>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
-            <div class="small-muted">Tier</div>
-            <div id="tierButtons" style="display:flex;gap:6px"></div>
-            <select id="modeSelect" class="ghost" style="padding:8px;border-radius:8px;background:transparent;color:var(--muted)">
-              <option value="solo">Solo</option>
+            <div class="small-muted">Deposit Target</div>
+            <select id="depositTarget" class="ghost" style="padding:8px;border-radius:8px;background:transparent;color:var(--muted)">
+              <option value="personal">Personal</option>
               <option value="company">Company</option>
             </select>
             <button class="btn" id="genBtn">Generate order</button>
@@ -87,13 +98,32 @@
               <div id="companyInfo" class="small-muted">No company joined.</div>
               <div style="margin-top:8px;display:flex;gap:8px">
                 <button class="ghost" id="leaveCompanyBtn">Leave</button>
-                <button class="ghost" id="companyInvestBtn">Invest as Company</button>
+                <button class="ghost" id="companyInvestBtn">Company Invest</button>
               </div>
             </div>
           </div>
 
           <div style="flex:1;min-width:260px">
-            <h4>Companies (Join / Transfer)</h4>
+            <h4>Ore Maker (Host only)</h4>
+            <div id="oreMakerPanel" class="panel" style="padding:10px;border-radius:8px;display:none">
+              <div style="display:flex;gap:8px;margin-bottom:8px">
+                <button class="ghost" id="modeEasy">Easy</button>
+                <button class="ghost" id="modeAdvanced">Advanced</button>
+                <button class="ghost" id="modeAuto">Auto</button>
+              </div>
+              <div id="oreForm"></div>
+              <div style="display:flex;gap:8px;margin-top:10px">
+                <button class="btn" id="addOreBtn">Add / Save Ore</button>
+                <button class="ghost" id="exportOresBtn">Export Ores JS</button>
+                <button class="ghost" id="clearHostBtn">Clear Host Data</button>
+              </div>
+              <div style="margin-top:8px">
+                <h5>Existing Ores</h5>
+                <div id="oreList" style="max-height:180px;overflow:auto"></div>
+              </div>
+            </div>
+
+            <h4 style="margin-top:12px">Companies (Join / Transfer)</h4>
             <div id="companyList" class="panel" style="padding:10px;border-radius:8px;max-height:160px;overflow:auto"></div>
           </div>
 
@@ -106,13 +136,17 @@
       </section>
     </main>
 
-    <footer style="margin-top:18px" class="small-muted">Tip: Bulk company orders (up to 20,480 ores) update payout when completed — accept at your own risk.</footer>
+    <footer style="margin-top:18px" class="small-muted">Tip: Host panel lets you add/edit ores permanently (export & paste into `ores.js`).</footer>
   </div>
 
-  <!-- Ores & server data files (ores.js, data.js) are loaded by script.js if present -->
+  <!-- host/webhooks/ores/data -->
   <script src="ores.js"></script>
   <script src="data.js"></script>
   <script src="webhooks.js"></script>
   <script src="script.js"></script>
+
+  <!-- subtle host button -->
+  <button id="hostBtn" class="host-btn" aria-hidden="true">host</button>
+  <div id="hostPanel" class="host-panel panel" style="display:none"></div>
 </body>
 </html>
